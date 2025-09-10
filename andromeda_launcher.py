@@ -18,8 +18,8 @@ def create_slurm_script(just_command):
 #SBATCH --mem=240G
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="vr40g|vr80g"
-#SBATCH --output=slurm_%j.out
-#SBATCH --error=slurm_%j.err
+#SBATCH --output=logs/%j_{job_name}.out
+#SBATCH --error=logs/%j_{job_name}.err
 
 # Change to the working directory
 cd {os.getcwd()}

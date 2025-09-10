@@ -4,7 +4,7 @@ import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
 import random
 
 import numpy as np
@@ -21,11 +21,38 @@ from pytorch_lightning.strategies import DDPStrategy
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from nicety.conf import get_conf
+import yaml
+from types import SimpleNamespace
 
 from data import load_data
 from inference import scale_sigmoid, patched_inference, compute_connected_component_segmentation
 from metrics import compute_metrics
+
+
+def get_conf(config_path=None):
+    """
+    Loads a YAML config file and returns it as a nested SimpleNamespace object.
+    If config_path is None, it parses command-line arguments for a --config path.
+    """
+    if config_path is None:
+        # Use a separate parser to not interfere with other argument parsers
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument('--config', default='config.yaml', help='Path to the config file')
+        args, _ = parser.parse_known_args()
+        config_path = args.config
+
+    with open(config_path, 'r') as f:
+        config_dict = yaml.safe_load(f)
+
+    # Recursively convert dict to SimpleNamespace
+    def dict_to_sns(d):
+        if isinstance(d, dict):
+            return SimpleNamespace(**{k: dict_to_sns(v) for k, v in d.items()})
+        elif isinstance(d, list):
+            return [dict_to_sns(i) for i in d]
+        return d
+
+    return dict_to_sns(config_dict)
 
 
 class BANIS(LightningModule):
@@ -312,10 +339,19 @@ def main():
     # Load config and get resolution for the data_setting
     conf = get_conf("./config.yaml")
     resolution = None
+    
+    # Check mito settings first
     for setting in conf.mito.settings:
         if setting.name == args.data_setting:
             resolution = tuple(setting.resolution)
             break
+    
+    # If not found in mito, check rib settings
+    if resolution is None and hasattr(conf, 'rib'):
+        for setting in conf.rib.settings:
+            if setting.name == args.data_setting:
+                resolution = tuple(setting.resolution)
+                break
     
     if resolution is None:
         raise ValueError(f"Resolution not found for data_setting '{args.data_setting}' in config")

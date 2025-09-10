@@ -77,3 +77,13 @@ mito:
       train: ["neg0", "pos0"]
       test: ["neg1", "pos1"]
       val: ["pos2"]
+
+rib:
+  data_path: ./rib_data
+  settings:
+    - name: ribFrac
+      resolution: [1, 1, 1]
+      path: /projects/weilab/liupeng/dataset/rib
+      train: ["RibFrac301", "RibFrac302", "RibFrac303", "RibFrac304", "RibFrac305", "RibFrac306", "RibFrac307", "RibFrac308", "RibFrac309", "RibFrac310", "RibFrac311", "RibFrac312", "RibFrac313", "RibFrac314", "RibFrac315", "RibFrac316", "RibFrac317", "RibFrac318", "RibFrac319", "RibFrac320", "RibFrac321", "RibFrac322", "RibFrac323", "RibFrac324", "RibFrac325", "RibFrac326", "RibFrac327", "RibFrac328", "RibFrac329", "RibFrac330", "RibFrac331", "RibFrac332", "RibFrac333", "RibFrac334", "RibFrac335", "RibFrac336", "RibFrac337", "RibFrac338", "RibFrac339", "RibFrac340", "RibFrac341", "RibFrac342", "RibFrac343", "RibFrac344", "RibFrac345", "RibFrac346", "RibFrac347", "RibFrac348", "RibFrac349", "RibFrac350", "RibFrac351", "RibFrac352", "RibFrac353", "RibFrac354", "RibFrac355", "RibFrac356", "RibFrac357", "RibFrac358", "RibFrac359", "RibFrac360", "RibFrac361", "RibFrac362", "RibFrac363", "RibFrac364", "RibFrac365", "RibFrac366", "RibFrac367", "RibFrac368", "RibFrac369", "RibFrac370", "RibFrac371", "RibFrac372", "RibFrac373", "RibFrac374", "RibFrac375", "RibFrac376", "RibFrac377", "RibFrac378", "RibFrac379", "RibFrac380", "RibFrac381", "RibFrac382", "RibFrac383", "RibFrac384", "RibFrac385", "RibFrac386", "RibFrac387", "RibFrac388", "RibFrac389", "RibFrac390",]
+      test: [ "RibFrac391", "RibFrac392", "RibFrac393", "RibFrac394", "RibFrac395", "RibFrac396", "RibFrac397", "RibFrac398", "RibFrac399", "RibFrac400", "RibFrac401", "RibFrac402", "RibFrac403", "RibFrac404", "RibFrac405", "RibFrac406", "RibFrac407", "RibFrac408", "RibFrac409", "RibFrac410"]
+      val: ["RibFrac411", "RibFrac412", "RibFrac413", "RibFrac414", "RibFrac415", "RibFrac416", "RibFrac417", "RibFrac418", "RibFrac419", "RibFrac420"]

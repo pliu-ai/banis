@@ -1,6 +1,14 @@
 *.out
 *.err
 slurm-*.out
+*.sl
+
+# data
+mito_data/
+mito_outputs/
+rib_data/
+rib_outputs/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -29,6 +37,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+pymp*/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

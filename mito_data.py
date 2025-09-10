@@ -5,8 +5,35 @@ import pickle
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from nicety.conf import get_conf
-from nicety.array import smallest_dtype
+import yaml
+import argparse
+from types import SimpleNamespace
+
+
+def get_conf(config_path=None):
+    """
+    Loads a YAML config file and returns it as a nested SimpleNamespace object.
+    If config_path is None, it parses command-line arguments for a --config path.
+    """
+    if config_path is None:
+        # Use a separate parser to not interfere with other argument parsers
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument('--config', default='config.yaml', help='Path to the config file')
+        args, _ = parser.parse_known_args()
+        config_path = args.config
+
+    with open(config_path, 'r') as f:
+        config_dict = yaml.safe_load(f)
+
+    # Recursively convert dict to SimpleNamespace
+    def dict_to_sns(d):
+        if isinstance(d, dict):
+            return SimpleNamespace(**{k: dict_to_sns(v) for k, v in d.items()})
+        elif isinstance(d, list):
+            return [dict_to_sns(i) for i in d]
+        return d
+
+    return dict_to_sns(config_dict)
 
 
 def convert_h5_to_zarr(h5_im_path, h5_mito_path, h5_mask_path, zarr_path):
@@ -34,7 +61,10 @@ def convert_h5_to_zarr(h5_im_path, h5_mito_path, h5_mask_path, zarr_path):
             print("Warning: There are segmentation labels in regions where mask is 0. Setting those seg labels to -1.")
 
         if np.any(~mask_data):
-            seg_data = seg_data.astype(smallest_dtype([seg_data, -1]))
+            # Determine smallest signed integer type that can hold the data and -1
+            max_val = seg_data.max()
+            new_dtype = np.int32 if max_val <= np.iinfo(np.int32).max else np.int64
+            seg_data = seg_data.astype(new_dtype, copy=False)
             seg_data[~mask_data] = -1
         
         # Assert both original img and seg are 3D
@@ -48,8 +78,8 @@ def convert_h5_to_zarr(h5_im_path, h5_mito_path, h5_mask_path, zarr_path):
         root = zarr.open(zarr_path, mode='w')
         
         # Save img and seg
-        root.create_array('img', data=img_data)
-        root.create_array('seg', data=seg_data)
+        root.array('img', data=img_data)
+        root.array('seg', data=seg_data)
 
 
 def create_skeleton_pkl(path):
