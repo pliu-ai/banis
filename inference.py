@@ -100,6 +100,27 @@ def patched_inference(
     print(
         f"Performing patched inference with do_overlap={do_overlap} for img of shape {img.shape} and dtype {img.dtype}")
     img = img[:]  # load into memory (expensive!)
+    
+    # Store original shape for later cropping
+    original_shape = img.shape[:3]
+    
+    # Check if any dimension is smaller than small_size and pad if necessary
+    needs_padding = any(dim < small_size for dim in original_shape)
+    if needs_padding:
+        print(f"Image dimensions {original_shape} smaller than patch size {small_size}, padding to minimum size")
+        # Calculate padding needed for each dimension
+        pad_width = []
+        for dim in original_shape:
+            if dim < small_size:
+                pad_width.append((0, small_size - dim))
+            else:
+                pad_width.append((0, 0))
+        # Add padding for channel dimension (no padding)
+        pad_width.append((0, 0))
+        
+        # Pad the image
+        img = np.pad(img, pad_width, mode='constant', constant_values=0)
+        print(f"Padded image shape: {img.shape}")
 
     patch_coordinates = get_coordinates(img.shape[:3], small_size, do_overlap)
     single_pred_weight = get_single_pred_weight(do_overlap, small_size)
@@ -131,6 +152,11 @@ def patched_inference(
     del img  # to save memory before division
     # assert np.all(weight_sum > 0)
     np.divide(weighted_pred, weight_sum, out=weighted_pred)
+
+    # Crop back to original size if padding was applied
+    if needs_padding:
+        weighted_pred = weighted_pred[:, :original_shape[0], :original_shape[1], :original_shape[2]]
+        print(f"Cropped prediction back to original shape: {weighted_pred.shape[1:]}")
 
     return weighted_pred
 
@@ -186,6 +212,10 @@ def get_offsets(big_size: int, small_size: int) -> List[int]:
     Returns:
         List of offsets.
     """
+    if big_size < small_size:
+        # If image is smaller than patch size, we can only start at 0
+        return [0]
+    
     offsets = list(range(0, big_size - small_size + 1, small_size))
     if offsets[-1] != big_size - small_size:
         offsets.append(big_size - small_size)

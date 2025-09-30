@@ -8,7 +8,7 @@ mito_data/
 mito_outputs/
 rib_data/
 rib_outputs/
-
+rib_pointclouds/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

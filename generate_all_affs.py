@@ -9,5 +9,5 @@ if __name__ == "__main__":
     args = args.parse_args()
 
     model = BANIS.load_from_checkpoint(args.checkpoint_path)
-    model.full_cube_inference("val", all_seeds=True, evaluate_thresholds=False, prediction_channels=args.prediction_channels)
+    model.full_cube_inference("test", all_seeds=True, evaluate_thresholds=False, prediction_channels=args.prediction_channels)
     # model.full_cube_inference("train", all_seeds=True, evaluate_thresholds=False)
