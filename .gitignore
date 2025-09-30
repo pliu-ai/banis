@@ -2,7 +2,8 @@
 *.err
 slurm-*.out
 *.sl
-
+*.tiff
+*.tif
 # data
 mito_data/
 mito_outputs/
