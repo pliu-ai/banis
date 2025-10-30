@@ -77,6 +77,53 @@ mito:
       train: ["neg0", "pos0"]
       test: ["neg1", "pos1"]
       val: ["pos2"]
+    - name: Jurkat
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/cellmap24_jurkat
+      train: ["jrc_jurkat-1_recon-1_test0"]
+      test: ["jrc_jurkat-1_recon-1_test1"]
+      val: ["jrc_jurkat-1_recon-1_test1"]
+    - name: Cardiac
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/cellmap24_cardiac
+      train: ["jrc_zf-cardiac-1_recon-1_test0"]
+      test: ["jrc_zf-cardiac-1_recon-1_test1"]
+      val: ["jrc_zf-cardiac-1_recon-1_test1"]
+    - name: Kidney
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/cellmap24_kidney
+      train: ["jrc_mus-kidney_recon-1_test0"]
+      test: ["jrc_mus-kidney_recon-1_test1"]
+      val: ["jrc_mus-kidney_recon-1_test1"]
+    - name: Liver
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/cellmap24_liver
+      train: ["jrc_mus-liver_recon-1_test0"]
+      test: ["jrc_mus-liver_recon-1_test1"]
+      val: ["jrc_mus-liver_recon-1_test1"]
+    - name: Sperm
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/Kedar_f536
+      train: ["kedar_f536_0","kedar_f536_1","kedar_f536_2"]
+      test: ["kedar_f536_3"]
+      val: ["kedar_f536_3"]
+    - name: Macrophage
+      resolution: [16, 16, 16]
+      path: /projects/weilab/dataset/MitoLE/cellmap24_macrophage
+      train: ["jrc_macrophage-2_recon-1_test0"]
+      test: ["jrc_macrophage-2_recon-1_test1"]
+      val: ["jrc_macrophage-2_recon-1_test1"]
+    - name: Wei20
+      resolution: [30, 8, 8]
+      path: /projects/weilab/dataset/mito/mitoEM/chunk/
+      train: ["mitoEM_H_0_0","mitoEM_H_0_1","mitoEM_H_0_2","mitoEM_H_0_3","mitoEM_H_1_0","mitoEM_H_1_1","mitoEM_H_1_2","mitoEM_H_1_3","mitoEM_H_2_0","mitoEM_H_2_1","mitoEM_H_2_2","mitoEM_H_2_3","mitoEM_H_3_0","mitoEM_H_3_1","mitoEM_H_3_2", "mitoEM_R_0_0","mitoEM_R_0_1","mitoEM_R_0_2","mitoEM_R_0_3","mitoEM_R_1_0","mitoEM_R_1_1","mitoEM_R_1_2","mitoEM_R_1_3","mitoEM_R_2_0","mitoEM_R_2_1","mitoEM_R_2_2","mitoEM_R_2_3","mitoEM_R_3_0","mitoEM_R_3_1","mitoEM_R_3_2"]
+      test: [ "mitoEM_H_3_3","mitoEM_R_3_3"]
+      val: ["mitoEM_H_3_3","mitoEM_R_3_3"]
+    - name: Jiang25
+      resolution: [30, 8, 8]
+      path: /projects/weilab/dataset/mitoLE/jiang25
+      train: ["vol0", "vol1"]
+      test: ["vol2"]
 
 rib:
   data_path: ./rib_data

@@ -109,7 +109,7 @@ def main():
     parser.add_argument('--cpus', '-c', type=int, default=32, help='每个任务请求的CPU核心数')
     parser.add_argument('--mem', '-m', default='240G', help='请求的内存大小 (例如: 240G)')
     parser.add_argument('--gpus', '-g', type=int, default=1, help='请求的GPU数量')
-    parser.add_argument('--constraint', default='vr40g|vr80g', help='GPU类型约束 (例如: "v100|a100")')
+    parser.add_argument('--constraint', default='', help='GPU类型约束 (例如: "v100|a100")')
     
     args = parser.parse_args()
     

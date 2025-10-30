@@ -10,7 +10,7 @@ mito_outputs/
 rib_data/
 rib_outputs/
 rib_pointclouds/
-
+outputs/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

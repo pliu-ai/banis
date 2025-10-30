@@ -383,9 +383,56 @@ def get_seg_dataset(
 
 
 def load_data(args: argparse.Namespace):
-    train_data = get_train_data(args)
-    val_data = get_val_data(args)
-    return train_data, val_data, val_data.img.shape[-1]
+    """Load training and validation data for single or multiple datasets.
+    
+    Args:
+        args: Namespace containing:
+            - data_settings: list of dataset names
+            - resolutions: list of resolutions for each dataset
+            - other training parameters
+    
+    Returns:
+        train_data: Training dataset (ConcatDataset if multiple datasets)
+        val_data: Validation dataset (uses first dataset by default)
+        n_channels: Number of input channels
+    """
+    # Support both single and multiple datasets
+    data_settings = args.data_settings if hasattr(args, 'data_settings') else [args.data_setting]
+    resolutions = args.resolutions if hasattr(args, 'resolutions') else [args.resolution]
+    
+    if len(data_settings) == 1:
+        # Single dataset - original behavior
+        train_data = get_train_data(args)
+        val_data = get_val_data(args)
+    else:
+        # Multiple datasets - load and concatenate all
+        print(f"Loading multiple datasets: {data_settings}")
+        train_datasets = []
+        val_datasets = []
+        
+        for ds, res in zip(data_settings, resolutions):
+            # Create a copy of args with current dataset info
+            ds_args = argparse.Namespace(**vars(args))
+            ds_args.data_setting = ds
+            ds_args.resolution = res
+            
+            print(f"Loading dataset: {ds} with resolution {res}")
+            train_ds = get_train_data(ds_args)
+            val_ds = get_val_data(ds_args)
+            
+            train_datasets.append(train_ds)
+            val_datasets.append(val_ds)
+        
+        # Concatenate all training datasets
+        train_data = ConcatDataset(train_datasets)
+        
+        # For validation, use the first dataset or concatenate all
+        # Using first dataset for simplicity and faster validation
+        val_data = val_datasets[0]
+        print(f"Using validation data from: {data_settings[0]}")
+    
+    n_channels = val_data.img.shape[-1]
+    return train_data, val_data, n_channels
 
 
 def get_train_data(args: argparse.Namespace):
@@ -416,8 +463,22 @@ def get_train_data(args: argparse.Namespace):
 
 
 def get_syn_train_data(args: argparse.Namespace):
-    """Get synthetic training data."""
-    base_path_train = os.path.join(args.base_data_path, args.data_setting, "train")
+    """Get synthetic training data.
+    
+    Args:
+        args: Namespace containing data_setting (single dataset name) and other parameters
+    
+    Returns:
+        ConcatDataset of training data from all seeds of the specified dataset
+    """
+    # Get the data_setting - should be a single string at this point
+    data_setting = args.data_setting if isinstance(args.data_setting, str) else args.data_setting[0]
+    
+    base_path_train = os.path.join(args.base_data_path, data_setting, "train")
+    
+    if not os.path.exists(base_path_train):
+        raise ValueError(f"Training data path does not exist: {base_path_train}")
+    
     seeds_path_train = sorted([f for f in os.listdir(base_path_train) if os.path.isdir(os.path.join(base_path_train, f))])
     assert seeds_path_train, f"No seeds found in {base_path_train}"
     seeds_train_paths = [os.path.join(base_path_train, seed) for seed in seeds_path_train]
@@ -426,14 +487,14 @@ def get_syn_train_data(args: argparse.Namespace):
         os.path.join(seed_train_path, "data.zarr")
         for seed_train_path in seeds_train_paths
     ])
-    print(f"image+segmentation paths: {img_seg_paths}")
+    print(f"[{data_setting}] image+segmentation paths: {img_seg_paths}")
     img_segs_train = [zarr.open(path, mode="r") for path in img_seg_paths]
     segs_train = [img_seg["seg"] for img_seg in img_segs_train]
-    print(f"Segmentation shapes: {[seg.shape for seg in segs_train]}")
+    print(f"[{data_setting}] Segmentation shapes: {[seg.shape for seg in segs_train]}")
 
     imgs_train = [img_seg["img"] for img_seg in img_segs_train]
-    print(f"Image shapes: {[img.shape for img in imgs_train]}")
-    print(f"Image dtypes: {[img.dtype for img in imgs_train]}")
+    print(f"[{data_setting}] Image shapes: {[img.shape for img in imgs_train]}")
+    print(f"[{data_setting}] Image dtypes: {[img.dtype for img in imgs_train]}")
 
     train_datasets = [
         AffinityDataset(
@@ -452,13 +513,28 @@ def get_syn_train_data(args: argparse.Namespace):
 
 
 def get_val_data(args: argparse.Namespace):
-    """Get validation data."""
-    base_path_val = os.path.join(args.base_data_path, args.data_setting, "val")
+    """Get validation data.
+    
+    Args:
+        args: Namespace containing data_setting (single dataset name) and other parameters
+    
+    Returns:
+        AffinityDataset for validation
+    """
+    # Get the data_setting - should be a single string at this point
+    data_setting = args.data_setting if isinstance(args.data_setting, str) else args.data_setting[0]
+    
+    base_path_val = os.path.join(args.base_data_path, data_setting, "val")
+    
+    if not os.path.exists(base_path_val):
+        raise ValueError(f"Validation data path does not exist: {base_path_val}")
+    
     seeds_path_val = sorted([f for f in os.listdir(base_path_val) if os.path.isdir(os.path.join(base_path_val, f))])
     assert seeds_path_val, f"No seeds found in {base_path_val}"
     seeds_val_paths = [os.path.join(base_path_val, seed) for seed in seeds_path_val]
 
     img_seg_path = os.path.join(seeds_val_paths[0], "data.zarr")
+    print(f"[{data_setting}] Loading validation data from: {img_seg_path}")
     img_seg = zarr.open(img_seg_path, mode="r")
 
     return AffinityDataset(

@@ -202,33 +202,71 @@ class BANIS(LightningModule):
         self.full_cube_inference("train")
 
     @torch.no_grad()
-    def full_cube_inference(self, mode: str, evaluate_thresholds: bool = True, all_seeds: bool = False, prediction_channels = 3, global_step=None):
+    def full_cube_inference(self, mode: str, evaluate_thresholds: bool = True, all_seeds: bool = False, prediction_channels = 3, global_step=None, data_setting: str = None):
         """Perform full cube inference. Expensive!
 
         Args:
             mode: Either "train", "val", or "test".
+            evaluate_thresholds: Whether to evaluate thresholds.
+            all_seeds: Whether to evaluate all seeds or just the first one.
+            prediction_channels: Number of prediction channels.
+            global_step: Global step for logging.
+            data_setting: Specific dataset to run inference on. If None and model was trained on
+                         multiple datasets, will run on all of them. If None and model was trained
+                         on single dataset, will use that dataset.
         """
         assert mode in ["train", "val", "test"], f"Invalid mode: {mode}"
         print(f"Full cube inference for {mode}")
 
-        base_path_mode = os.path.join(self.hparams.base_data_path, self.hparams.data_setting, mode)
-        seeds_path_mode = sorted([f for f in os.listdir(base_path_mode) if os.path.isdir(os.path.join(base_path_mode, f))])
-        assert len(seeds_path_mode) >= 1, f"No seeds found in {base_path_mode}"
-        if not all_seeds:
-            seeds_path_mode = seeds_path_mode[:1]
-        for x in seeds_path_mode:
-            seed_path = os.path.join(base_path_mode, x)
+        # Handle both single dataset (string) and multi-dataset (list) cases
+        if data_setting is not None:
+            # Use specified dataset
+            datasets_to_infer = [data_setting]
+        elif isinstance(self.hparams.data_setting, list):
+            # Multi-dataset case: infer on all datasets
+            datasets_to_infer = self.hparams.data_setting
+            print(f"Running inference on all {len(datasets_to_infer)} datasets: {datasets_to_infer}")
+        else:
+            # Single dataset case (backward compatibility)
+            datasets_to_infer = [self.hparams.data_setting]
+        
+        # Run inference on each dataset
+        for dataset_name in datasets_to_infer:
+            print(f"\n{'='*60}")
+            print(f"Running inference on dataset: {dataset_name}")
+            print(f"{'='*60}")
+            
+            base_path_mode = os.path.join(self.hparams.base_data_path, dataset_name, mode)
+            
+            if not os.path.exists(base_path_mode):
+                print(f"Warning: Path does not exist: {base_path_mode}, skipping...")
+                continue
+                
+            seeds_path_mode = sorted([f for f in os.listdir(base_path_mode) if os.path.isdir(os.path.join(base_path_mode, f))])
+            
+            if len(seeds_path_mode) == 0:
+                print(f"Warning: No seeds found in {base_path_mode}, skipping...")
+                continue
+                
+            if not all_seeds:
+                seeds_path_mode = seeds_path_mode[:1]
+                
+            for x in seeds_path_mode:
+                seed_path = os.path.join(base_path_mode, x)
+                print(f"Processing seed: {x} from {dataset_name}")
 
-            img_data = zarr.open(os.path.join(seed_path, "data.zarr"), mode="r")["img"]
+                img_data = zarr.open(os.path.join(seed_path, "data.zarr"), mode="r")["img"]
 
-            aff_pred = patched_inference(img_data, model=self, do_overlap=True, prediction_channels=prediction_channels, divide=255,
-                                         small_size=self.hparams.small_size)
+                aff_pred = patched_inference(img_data, model=self, do_overlap=True, prediction_channels=prediction_channels, divide=255,
+                                             small_size=self.hparams.small_size)
 
-            aff_pred = zarr.array(aff_pred, dtype=np.float16, store=f"{self.hparams.save_dir}/pred_aff_{mode}_{x}.zarr",
-                                  chunks=(3, 512, 512, 512), overwrite=True)
+                # Include dataset name in output file
+                output_name = f"pred_aff_{mode}_{dataset_name}_{x}.zarr" if len(datasets_to_infer) > 1 else f"pred_aff_{mode}_{x}.zarr"
+                aff_pred = zarr.array(aff_pred, dtype=np.float16, store=f"{self.hparams.save_dir}/{output_name}",
+                                      chunks=(3, 512, 512, 512), overwrite=True)
 
-            if evaluate_thresholds:
-                self._evaluate_thresholds(aff_pred, os.path.join(seed_path, "skeleton.pkl"), mode, global_step)
+                if evaluate_thresholds:
+                    self._evaluate_thresholds(aff_pred, os.path.join(seed_path, "skeleton.pkl"), f"{mode}_{dataset_name}" if len(datasets_to_infer) > 1 else mode, global_step)
 
     def _evaluate_thresholds(self, aff_pred: zarr.Array, skel_path: str, mode: str, global_step=None):
         best_voi = best_voi_no_merge = 1e100
@@ -336,35 +374,52 @@ class BANIS(LightningModule):
 def main():
     args = parse_args()
     
-    # Load config and get resolution for the data_setting
+    # Load config and get resolution for the data_setting(s)
     conf = get_conf("./config.yaml")
-    resolution = None
     
-    # Check mito settings first
-    for setting in conf.mito.settings:
-        if setting.name == args.data_setting:
-            resolution = tuple(setting.resolution)
-            break
+    # Support multiple data settings
+    data_settings = args.data_setting if isinstance(args.data_setting, list) else [args.data_setting]
     
-    # If not found in mito, check rib settings
-    if resolution is None and hasattr(conf, 'rib'):
-        for setting in conf.rib.settings:
-            if setting.name == args.data_setting:
+    # Get resolution for each data setting
+    resolutions = []
+    for ds in data_settings:
+        resolution = None
+        
+        # Check mito settings first
+        for setting in conf.mito.settings:
+            if setting.name == ds:
                 resolution = tuple(setting.resolution)
                 break
+        
+        # If not found in mito, check rib settings
+        if resolution is None and hasattr(conf, 'rib'):
+            for setting in conf.rib.settings:
+                if setting.name == ds:
+                    resolution = tuple(setting.resolution)
+                    break
+        
+        if resolution is None:
+            raise ValueError(f"Resolution not found for data_setting '{ds}' in config")
+        
+        resolutions.append(resolution)
     
-    if resolution is None:
-        raise ValueError(f"Resolution not found for data_setting '{args.data_setting}' in config")
+    # Store both data_settings and resolutions
+    args.data_settings = data_settings
+    args.resolutions = resolutions
     
-    args.resolution = resolution
+    # For backward compatibility and logging, keep the first one as primary
+    args.resolution = resolutions[0]
 
     seed_everything(args.seed, workers=True)
 
     torch.set_float32_matmul_precision("medium")
 
+    # Create experiment name with multiple datasets
+    data_setting_str = "+".join(args.data_settings) if len(args.data_settings) > 1 else args.data_settings[0]
+    
     exp_name = (
             datetime.now().strftime("%y-%m-%d_%H-%M-%S-%f")
-            + f"ds_{args.data_setting}"
+            + f"ds_{data_setting_str}"
               f"_lrng{args.long_range}_s{args.seed}_b{args.batch_size}_m{args.model_id}_k{args.kernel_size}_"
               f"lr{args.learning_rate}_wd{args.weight_decay}_sch{args.scheduler}_syn_{args.synthetic}"
               f"_drop{args.drop_slice_prob}_shift{args.shift_slice_prob}_int{args.intensity_aug}_noise{args.noise_scale}"
@@ -465,7 +520,7 @@ def parse_args():
 
     # Data arguments
     parser.add_argument("--base_data_path", type=str, default="/cajal/nvmescratch/projects/NISB/", help="Base path for the dataset.")
-    parser.add_argument("--data_setting", type=str, default="base", help="Data setting identifier.")
+    parser.add_argument("--data_setting", type=str, nargs="+", default=["base"], help="Data setting identifier(s). Can specify multiple datasets to train together.")
     parser.add_argument("--real_data_path", type=str, default="/cajal/scratch/projects/misc/mdraw/data/funke/zebrafinch/training/", help="Path to the real dataset. See https://colab.research.google.com/github/funkelab/lsd/blob/master/lsd/tutorial/notebooks/lsd_data_download.ipynb ")
     parser.add_argument("--synthetic", type=float, default=1.0, help="Ratio of synthetic data to real data.")
     parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True, help="Use augmentations")
