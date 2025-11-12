@@ -28,8 +28,6 @@ def create_slurm_script(
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
 #SBATCH --time={time}
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
 #SBATCH --gres=gpu:{gpus}
@@ -39,7 +37,6 @@ def create_slurm_script(
 
 # 切换到工作目录
 cd {os.getcwd()}
-echo "Current working directory: $(pwd)"
 
 echo "=========================================================="
 echo "Starting on $(hostname)"

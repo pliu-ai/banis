@@ -25,6 +25,22 @@ train_multi_mito:
 train_all_mito:
     uv run BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /projects/weilab/liupeng/banis/mito_data --save_path ./mito_outputs --devices=1 --sdt
 
+# Resume training from last checkpoint with experiment name
+resume_betaseg exp_name:
+    uv run BANIS.py --seed 0 --batch_size 8 --n_steps 500000 --data_setting betaSeg --base_data_path /projects/weilab/liupeng/banis/mito_data --save_path ./mito_outputs --devices=1 --sdt --resume_from_last_checkpoint --exp_name {{exp_name}}
+
+resume_han24 exp_name:
+    uv run BANIS.py --seed 0 --batch_size 8 --n_steps 500000 --data_setting han24 --base_data_path /projects/weilab/liupeng/banis/mito_data --save_path ./mito_outputs --devices=1 --sdt --resume_from_last_checkpoint --exp_name {{exp_name}}
+
+resume_ribfrac exp_name:
+    uv run BANIS.py --seed 0 --batch_size 4 --n_steps 500000 --data_setting ribFrac --base_data_path /projects/weilab/liupeng/banis/rib_data --save_path ./rib_outputs --devices=1 --sdt --resume_from_last_checkpoint --exp_name {{exp_name}}
+
+resume_multi_mito exp_name:
+    uv run BANIS.py --seed 0 --batch_size 4 --n_steps 500000 --data_setting betaSeg han24 Jurkat --base_data_path /projects/weilab/liupeng/banis/mito_data --save_path ./outputs/mito --devices=1 --sdt --resume_from_last_checkpoint --exp_name {{exp_name}}
+
+resume_all_mito exp_name:
+    uv run BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /projects/weilab/liupeng/banis/mito_data --save_path ./mito_outputs --devices=1 --sdt --resume_from_last_checkpoint --exp_name {{exp_name}}
+
 launch_betaseg:
     uv run andromeda_launcher.py train_betaseg
 

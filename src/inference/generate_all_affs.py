@@ -1,4 +1,11 @@
+import os
+import sys
 import argparse
+# Add parent directory to path to import BANIS and inference modules
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 from BANIS import BANIS
 
 if __name__ == "__main__":

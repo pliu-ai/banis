@@ -430,18 +430,6 @@ def main():
     save_dir = os.path.join(args.save_path, exp_name)
     os.makedirs(save_dir, exist_ok=True)
     print(f"save dir: {save_dir}")
-    
-    # Check if resuming from checkpoint
-    if args.resume_from_last_checkpoint:
-        checkpoint_dir = os.path.join(save_dir, "default", "checkpoints")
-        last_ckpt = os.path.join(checkpoint_dir, "last.ckpt")
-        if not os.path.exists(last_ckpt):
-            raise FileNotFoundError(
-                f"Cannot resume: checkpoint not found at {last_ckpt}\n"
-                f"Make sure --exp_name matches an existing experiment directory."
-            )
-        print(f"Resuming from checkpoint: {last_ckpt}")
-    
     tb_logger = TensorBoardLogger(
         save_dir=args.save_path,
         name=exp_name,
