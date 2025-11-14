@@ -12,6 +12,7 @@ from scipy.ndimage import distance_transform_cdt
 from torch import autocast
 from torch.nn.functional import sigmoid
 from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
 
 
 def scale_sigmoid(x: torch.Tensor) -> torch.Tensor:
@@ -151,6 +152,163 @@ def patched_inference(
             single_pred_weight[None] if do_overlap else 1)
     del img  # to save memory before division
     # assert np.all(weight_sum > 0)
+    np.divide(weighted_pred, weight_sum, out=weighted_pred)
+
+    # Crop back to original size if padding was applied
+    if needs_padding:
+        weighted_pred = weighted_pred[:, :original_shape[0], :original_shape[1], :original_shape[2]]
+        print(f"Cropped prediction back to original shape: {weighted_pred.shape[1:]}")
+
+    return weighted_pred
+
+
+class PatchDataset(Dataset):
+    """Dataset for loading image patches for parallel inference."""
+    
+    def __init__(self, img: np.ndarray, patch_coordinates: List[Tuple[int, int, int]], 
+                 small_size: int, divide: int = 1):
+        self.img = img
+        self.patch_coordinates = patch_coordinates
+        self.small_size = small_size
+        self.divide = divide
+    
+    def __len__(self):
+        return len(self.patch_coordinates)
+    
+    def __getitem__(self, idx):
+        x, y, z = self.patch_coordinates[idx]
+        img_patch = self.img[x: x + self.small_size, 
+                             y: y + self.small_size, 
+                             z: z + self.small_size]
+        # Convert to (channel, x, y, z) format
+        img_patch = np.moveaxis(img_patch, -1, 0)
+        img_tensor = torch.from_numpy(img_patch).half() / self.divide
+        return img_tensor, (x, y, z)
+
+
+@torch.no_grad()
+@autocast(device_type="cuda")
+def patched_inference_batch(
+        img: Union[np.ndarray, zarr.Array],
+        model: torch.nn.Module,
+        small_size: int = 128,
+        do_overlap: bool = True,
+        prediction_channels: int = 6,
+        divide: int = 1,
+        batch_size: int = 4,
+        num_workers: int = 4,
+        pin_memory: bool = True,
+) -> np.ndarray:
+    """
+    Perform patched inference with a model on an image using parallel batch processing.
+    This version processes multiple patches in parallel batches for improved efficiency.
+
+    Args:
+        img: The input image. Shape: (x, y, z, channel).
+        model: The model to use for predictions.
+        small_size: The size of the patches. Defaults to 128.
+        do_overlap: Whether to perform overlapping predictions. Defaults to True:
+            half of patch size for all 3 axes.
+        prediction_channels: The number of channels in the output (additional model output
+            dimensions are discarded). Defaults to 6 (3 short + 3 long range affinities).
+        divide: The divisor for the image. Typically, 1 or 255 if img in [0, 255]
+        batch_size: Number of patches to process in parallel. Defaults to 4.
+        num_workers: Number of worker threads for data loading. Defaults to 4.
+        pin_memory: Whether to use pinned memory for faster GPU transfer. Defaults to True.
+
+    Returns:
+        The full prediction. Shape: (channel, x, y, z).
+    """
+    assert 3 <= prediction_channels <= 7
+    calculate_sdt = prediction_channels == 7
+    if calculate_sdt:
+        assert model.hparams.sdt
+
+    print(
+        f"Performing parallel patched inference with do_overlap={do_overlap}, "
+        f"batch_size={batch_size}, num_workers={num_workers} for img of shape {img.shape} and dtype {img.dtype}")
+    img = img[:]  # load into memory (expensive!)
+    
+    # Store original shape for later cropping
+    original_shape = img.shape[:3]
+    
+    # Check if any dimension is smaller than small_size and pad if necessary
+    needs_padding = any(dim < small_size for dim in original_shape)
+    if needs_padding:
+        print(f"Image dimensions {original_shape} smaller than patch size {small_size}, padding to minimum size")
+        # Calculate padding needed for each dimension
+        pad_width = []
+        for dim in original_shape:
+            if dim < small_size:
+                pad_width.append((0, small_size - dim))
+            else:
+                pad_width.append((0, 0))
+        # Add padding for channel dimension (no padding)
+        pad_width.append((0, 0))
+        
+        # Pad the image
+        img = np.pad(img, pad_width, mode='constant', constant_values=0)
+        print(f"Padded image shape: {img.shape}")
+
+    patch_coordinates = get_coordinates(img.shape[:3], small_size, do_overlap)
+    single_pred_weight = get_single_pred_weight(do_overlap, small_size)
+    
+    weight_sum = np.zeros((1, *img.shape[:3]), dtype=np.float32)
+    weighted_pred = np.zeros((prediction_channels, *img.shape[:3]), dtype=np.float32)
+
+    device = next(model.parameters()).device
+    assert device.type != 'cpu'
+    
+    # Create dataset and dataloader for parallel processing
+    dataset = PatchDataset(img, patch_coordinates, small_size, divide)
+    dataloader_kwargs = {
+        'batch_size': batch_size,
+        'shuffle': False,
+        'num_workers': num_workers,
+        'pin_memory': pin_memory,
+    }
+    # persistent_workers is only available in PyTorch >= 1.7.0
+    # Try to use it if available, otherwise fall back
+    try:
+        dataloader = DataLoader(dataset, persistent_workers=num_workers > 0, **dataloader_kwargs)
+    except TypeError:
+        # Fall back if persistent_workers is not supported
+        dataloader = DataLoader(dataset, **dataloader_kwargs)
+    
+    # Process patches in batches
+    for batch_imgs, batch_coords in tqdm(dataloader, desc="Processing patches"):
+        batch_imgs = batch_imgs.to(device, non_blocking=pin_memory)
+        
+        # Forward pass
+        if calculate_sdt:
+            pred = model(batch_imgs)
+            pred = torch.cat(
+                [scale_sigmoid(pred[:, :prediction_channels - 1]), 
+                 tanh(pred[:, prediction_channels - 1:])], dim=1
+            )
+        else:
+            pred = scale_sigmoid(model(batch_imgs))[:, :prediction_channels]
+        
+        # Move predictions to CPU and accumulate
+        pred_np = pred.cpu().numpy()
+        
+        # DataLoader returns coordinates as tuple of tensors: (x_batch, y_batch, z_batch)
+        x_coords, y_coords, z_coords = batch_coords
+        
+        # Accumulate predictions for each patch in the batch
+        for i in range(len(x_coords)):
+            x, y, z = int(x_coords[i]), int(y_coords[i]), int(z_coords[i])
+            weight_sum[:, x: x + small_size, y: y + small_size,
+                      z: z + small_size] += single_pred_weight if do_overlap else 1
+            weighted_pred[:, x: x + small_size, y: y + small_size, z: z + small_size] += \
+                pred_np[i] * (single_pred_weight[None] if do_overlap else 1)
+    
+    del img  # to save memory before division
+    del dataset, dataloader
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    # Normalize by weight sum
     np.divide(weighted_pred, weight_sum, out=weighted_pred)
 
     # Crop back to original size if padding was applied

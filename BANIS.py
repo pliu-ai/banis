@@ -24,9 +24,9 @@ from tqdm import tqdm
 import yaml
 from types import SimpleNamespace
 
-from data import load_data
-from inference import scale_sigmoid, patched_inference, compute_connected_component_segmentation
-from metrics import compute_metrics
+from src.data.data import load_data
+from src.inference.inference import scale_sigmoid, patched_inference, compute_connected_component_segmentation
+from src.evaluation.metrics import compute_metrics
 
 
 def get_conf(config_path=None):

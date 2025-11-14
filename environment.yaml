@@ -1,4 +1,4 @@
-name: nisb
+name: mito_sdt 
 channels:
   - conda-forge
   - nodefaults
