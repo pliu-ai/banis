@@ -27,19 +27,19 @@ Tested on a Slurm cluster with nodes equipped with 1 NVIDIA A40 GPU and 500 GB R
 Run a single training session (BANIS-S(mall)):
 
 ```bash
-python BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /path/to/sample_data --save_path ./outputs/mito --devices=1 --sdt 
+python BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /path/to/sample_data --save_path ./checkpoints/mito --devices=1 --sdt 
 ```
 Results are logged to TensorBoard. For GPUs with less than 48 GB memory, reduce `batch_size` (and adjust `n_steps` / `learning_rate`). For BANIS-L(arge) add `--model_id L --kernel_size 5`. Additional options are in `parse_args` of `BANIS.py`.
 
 To run multiple jobs on Slurm, adjust `config.yaml` and `aff_train.sh`, then:
 
 ```bash
-python submit_slurm.py "python BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /path/to/sample_data --save_path ./outputs/mito --devices=1 --sdt" -t 120:00:00 -p long -n train_allmito_sdt --constraint vr80g
+python submit_slurm.py "python BANIS.py --seed 0 --batch_size 2 --n_steps 1000000 --data_setting betaSeg han24 Jurkat Cardiac Kidney Liver Sperm Macrophage --base_data_path /path/to/sample_data --save_path ./checkpoints/mito --devices=1 --sdt" -t 120:00:00 -p long -n train_allmito_sdt --constraint vr80g
 ```
 ## Inference
  ```bash
 # Without evaluation (default behavior)
-python predict_h5.py \
+python src/inference/pred_and_eval.py \
     --checkpoint_path model.ckpt \
     --input_path data.nii.gz \
     --output_path output_dir/ \
