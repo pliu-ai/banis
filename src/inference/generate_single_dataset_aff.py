@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-对指定数据集进行推理的脚本
-支持选择单个或多个数据集
+Script for inference on specified dataset(s)
+Supports selecting single or multiple datasets
 """
 import argparse
 from BANIS import BANIS
