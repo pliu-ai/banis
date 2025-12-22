@@ -410,6 +410,93 @@ def save_image_data(data, output_path, reference_sitk_image=None, h5_key="data")
     print(f"Saved to: {output_path}, shape: {data.shape}, dtype: {data.dtype}")
 
 
+def resolve_output_extension(output_format: str) -> str:
+    """
+    Normalize output extension so both single and batch modes produce consistent filenames.
+    """
+    fmt = output_format.lower()
+    if fmt.startswith("."):
+        fmt = fmt[1:]
+    if fmt == "nii.gz":
+        return ".nii.gz"
+    return f".{fmt}"
+
+
+def process_batch_directories(
+    batch_root: str,
+    output_root: str,
+    affinity_filename: str = "affinity_ch1.tif",
+    skeleton_filename: str = "skeleton_distance.tif",
+    batch_pattern: str = "*",
+    skip_existing: bool = False,
+    transpose_axes: bool = False,
+    binary_threshold: float = 0.5,
+    skeleton_threshold: float = 0.0,
+    watershed_min_size: int = 100,
+    edt_downsample_factor: int = 1,
+    use_fast_edt: bool = True,
+    edt_parallel: int = 4,
+    edt_anisotropy: tuple = None,
+    output_format: str = "tiff",
+    gt_file: str = None,
+    mask_file: str = None,
+    mask_h5_key: str = "",
+):
+    """
+    Process all subdirectories under batch_root that contain the required prediction files.
+    """
+    batch_root_path = Path(batch_root)
+    output_root_path = Path(output_root)
+    if not batch_root_path.exists() or not batch_root_path.is_dir():
+        raise ValueError(f"Batch root not found or not a directory: {batch_root}")
+    
+    output_root_path.mkdir(parents=True, exist_ok=True)
+    subdirs = sorted([p for p in batch_root_path.glob(batch_pattern) if p.is_dir()])
+    if not subdirs:
+        print(f"No subdirectories matching pattern '{batch_pattern}' found in {batch_root}")
+        return
+    
+    required_files = [affinity_filename, skeleton_filename]
+    output_ext = resolve_output_extension(output_format)
+    print(f"Found {len(subdirs)} candidate folders under {batch_root} (pattern='{batch_pattern}')")
+    
+    for idx, pred_dir in enumerate(subdirs, start=1):
+        missing = [name for name in required_files if not (pred_dir / name).exists()]
+        if missing:
+            print(f"[{idx}/{len(subdirs)}] Skipping {pred_dir.name}: missing files {missing}")
+            continue
+        
+        current_output_dir = output_root_path / pred_dir.name
+        final_seg_path = current_output_dir / f"final_instance_seg{output_ext}"
+        if skip_existing and final_seg_path.exists():
+            print(f"[{idx}/{len(subdirs)}] Skipping {pred_dir.name}: found existing {final_seg_path}")
+            continue
+        
+        print(f"\n[{idx}/{len(subdirs)}] Processing {pred_dir} -> {current_output_dir}")
+        try:
+            process_rib_watershed_and_eval(
+                input_dir=str(pred_dir),
+                output_path=str(current_output_dir),
+                affinity_filename=affinity_filename,
+                skeleton_filename=skeleton_filename,
+                transpose_axes=transpose_axes,
+                binary_threshold=binary_threshold,
+                skeleton_threshold=skeleton_threshold,
+                watershed_min_size=watershed_min_size,
+                edt_downsample_factor=edt_downsample_factor,
+                use_fast_edt=use_fast_edt,
+                edt_parallel=edt_parallel,
+                edt_anisotropy=edt_anisotropy,
+                output_format=output_format,
+                gt_file=gt_file,
+                mask_file=mask_file,
+                mask_h5_key=mask_h5_key,
+            )
+        except Exception as e:
+            print(f"⚠️  Error processing {pred_dir.name}: {e}")
+            continue
+
+
 def process_rib_watershed_and_eval(
     input_dir: str,
     output_path: str,
@@ -467,7 +554,7 @@ def process_rib_watershed_and_eval(
         print("\n⚠️  Note: Data was transposed. Output will be saved with transposed shape (Z,Y,X) without original metadata.")
     
     # Determine output format
-    output_ext = '.' + output_format.replace('.', '')
+    output_ext = resolve_output_extension(output_format)
     
     # Create output directory
     output_dir = Path(output_path)
@@ -639,6 +726,10 @@ if __name__ == "__main__":
 Examples:
   # Basic watershed segmentation (using default filenames)
   python rib_watershed_and_eval.py --input_dir /path/to/data/ --output_path output_dir/
+
+  # Batch process every prediction folder under a root
+  python rib_watershed_and_eval.py --batch_root /path/to/all_preds/ --output_path /path/to/batch_outputs/ \\
+      --batch_pattern "pred_aff_test_*"
   
   # Apply watershed with custom thresholds
   python rib_watershed_and_eval.py --input_dir /path/to/data/ --output_path output_dir/ \\
@@ -679,10 +770,17 @@ Examples:
     )
     
     # Required arguments
-    parser.add_argument("--input_dir", type=str, required=True, 
-                       help="Path to the directory containing TIFF files (affinity_ch1.tif, skeleton_distance.tif, etc.)")
+    parser.add_argument("--input_dir", type=str, required=False, 
+                       help="Path to the directory containing TIFF files (affinity_ch1.tif, skeleton_distance.tif, etc.). "
+                            "Use this for single-folder processing.")
+    parser.add_argument("--batch_root", type=str, default=None,
+                       help="Process all subdirectories under this root that contain required prediction files.")
+    parser.add_argument("--batch_pattern", type=str, default="*", 
+                       help="Glob pattern to select subdirectories when using --batch_root (default: '*').")
+    parser.add_argument("--skip_existing", action="store_true", default=False,
+                       help="Skip folders where the final output file already exists.")
     parser.add_argument("--output_path", type=str, required=True, 
-                       help="Path to output directory")
+                       help="Path to output directory. In batch mode, this is the root where per-folder outputs are saved.")
     
     # File loading options
     parser.add_argument("--affinity_filename", type=str, default="affinity_ch1.tif", 
@@ -726,32 +824,59 @@ Examples:
     
     args = parser.parse_args()
     
-    # Validate paths
-    if not os.path.exists(args.input_dir):
-        raise FileNotFoundError(f"Input directory not found: {args.input_dir}")
+    if not args.input_dir and not args.batch_root:
+        parser.error("Please provide either --input_dir for single processing or --batch_root for batch processing.")
     
-    if not os.path.isdir(args.input_dir):
-        raise ValueError(f"Input path is not a directory: {args.input_dir}")
+    if args.input_dir and args.batch_root:
+        parser.error("Specify only one of --input_dir or --batch_root.")
     
     # Convert edt_anisotropy list to tuple if provided
     edt_anisotropy = tuple(args.edt_anisotropy) if args.edt_anisotropy is not None else None
     
-    process_rib_watershed_and_eval(
-        input_dir=args.input_dir,
-        output_path=args.output_path,
-        affinity_filename=args.affinity_filename,
-        skeleton_filename=args.skeleton_filename,
-        transpose_axes=args.transpose_axes,
-        binary_threshold=args.binary_threshold,
-        skeleton_threshold=args.skeleton_threshold,
-        watershed_min_size=args.watershed_min_size,
-        edt_downsample_factor=args.edt_downsample_factor,
-        use_fast_edt=args.use_fast_edt,
-        edt_parallel=args.edt_parallel,
-        edt_anisotropy=edt_anisotropy,
-        output_format=args.output_format,
-        gt_file=args.gt_file,
-        mask_file=args.mask_file,
-        mask_h5_key=args.mask_h5_key,
-    )
-
+    if args.batch_root:
+        process_batch_directories(
+            batch_root=args.batch_root,
+            output_root=args.output_path,
+            affinity_filename=args.affinity_filename,
+            skeleton_filename=args.skeleton_filename,
+            batch_pattern=args.batch_pattern,
+            skip_existing=args.skip_existing,
+            transpose_axes=args.transpose_axes,
+            binary_threshold=args.binary_threshold,
+            skeleton_threshold=args.skeleton_threshold,
+            watershed_min_size=args.watershed_min_size,
+            edt_downsample_factor=args.edt_downsample_factor,
+            use_fast_edt=args.use_fast_edt,
+            edt_parallel=args.edt_parallel,
+            edt_anisotropy=edt_anisotropy,
+            output_format=args.output_format,
+            gt_file=args.gt_file,
+            mask_file=args.mask_file,
+            mask_h5_key=args.mask_h5_key,
+        )
+    else:
+        # Validate paths for single-folder mode
+        if not os.path.exists(args.input_dir):
+            raise FileNotFoundError(f"Input directory not found: {args.input_dir}")
+        
+        if not os.path.isdir(args.input_dir):
+            raise ValueError(f"Input path is not a directory: {args.input_dir}")
+        
+        process_rib_watershed_and_eval(
+            input_dir=args.input_dir,
+            output_path=args.output_path,
+            affinity_filename=args.affinity_filename,
+            skeleton_filename=args.skeleton_filename,
+            transpose_axes=args.transpose_axes,
+            binary_threshold=args.binary_threshold,
+            skeleton_threshold=args.skeleton_threshold,
+            watershed_min_size=args.watershed_min_size,
+            edt_downsample_factor=args.edt_downsample_factor,
+            use_fast_edt=args.use_fast_edt,
+            edt_parallel=args.edt_parallel,
+            edt_anisotropy=edt_anisotropy,
+            output_format=args.output_format,
+            gt_file=args.gt_file,
+            mask_file=args.mask_file,
+            mask_h5_key=args.mask_h5_key,
+        )

@@ -155,7 +155,7 @@ def compute_dice(pred_seg, gt_seg, label_id):
     return 2.0 * intersection / total
 
 
-def evaluate_dice(pred_path, gt_path, resize_gt=True, verbose=True):
+def evaluate_dice(pred_path, gt_path, resize_gt=True, verbose=True, transpose_gt="auto"):
     """
     Evaluate Dice coefficient between prediction and ground truth segmentation.
     
@@ -164,6 +164,11 @@ def evaluate_dice(pred_path, gt_path, resize_gt=True, verbose=True):
         gt_path: Path to ground truth segmentation file
         resize_gt: Whether to resize GT to match prediction shape
         verbose: Whether to print progress messages
+        transpose_gt: How to transpose GT to match pred shape. Options:
+            - "auto": Auto-detect based on shape (default)
+            - "zyx_to_xyz": Transpose from (Z,Y,X) to (X,Y,Z) using (2,1,0)
+            - "zyx_to_yxz": Transpose from (Z,Y,X) to (Y,X,Z) using (1,2,0)
+            - "none": No transpose
     
     Returns:
         dict: Evaluation results including average Dice
@@ -186,14 +191,41 @@ def evaluate_dice(pred_path, gt_path, resize_gt=True, verbose=True):
         if gt_seg.shape != pred_seg.shape:
             if verbose:
                 print(f"Warning: GT shape {gt_seg.shape} != pred shape {pred_seg.shape}")
-            if resize_gt:
-                from scipy.ndimage import zoom
-                zoom_factors = [pred_seg.shape[i] / gt_seg.shape[i] for i in range(len(pred_seg.shape))]
-                gt_seg = zoom(gt_seg, zoom_factors, order=0)  # Nearest neighbor interpolation
-                if verbose:
-                    print(f"Resized GT to: {gt_seg.shape}")
-            else:
-                raise ValueError(f"Shape mismatch: pred {pred_seg.shape} vs gt {gt_seg.shape}")
+            
+            # First check if this is a transpose issue (same dimensions, different order)
+            if sorted(gt_seg.shape) == sorted(pred_seg.shape) and len(gt_seg.shape) == 3:
+                gt_shape = list(gt_seg.shape)
+                pred_shape = list(pred_seg.shape)
+                
+                # Determine transpose order based on transpose_gt parameter
+                if transpose_gt == "zyx_to_xyz":
+                    transpose_order = (2, 1, 0)
+                elif transpose_gt == "zyx_to_yxz":
+                    transpose_order = (1, 2, 0)
+                elif transpose_gt == "none":
+                    transpose_order = None
+                else:  # "auto"
+                    # For 3D medical images:
+                    # - NIfTI (GT) is typically (Z, Y, X) - depth first
+                    # - TIFF (Pred) is typically (X, Y, Z) or (Y, X, Z) - depth last
+                    # Default: Use (2, 1, 0) transpose to convert from (Z, Y, X) to (X, Y, Z)
+                    transpose_order = (2, 1, 0)
+                
+                if transpose_order is not None:
+                    gt_seg = np.transpose(gt_seg, transpose_order)
+                    if verbose:
+                        print(f"Transposed GT {transpose_order} from {gt_shape} to: {gt_seg.shape}")
+            
+            # If shapes still don't match after transpose attempt, try resize
+            if gt_seg.shape != pred_seg.shape:
+                if resize_gt:
+                    from scipy.ndimage import zoom
+                    zoom_factors = [pred_seg.shape[i] / gt_seg.shape[i] for i in range(len(pred_seg.shape))]
+                    gt_seg = zoom(gt_seg, zoom_factors, order=0)  # Nearest neighbor interpolation
+                    if verbose:
+                        print(f"Resized GT to: {gt_seg.shape}")
+                else:
+                    raise ValueError(f"Shape mismatch: pred {pred_seg.shape} vs gt {gt_seg.shape}")
         
         # Match prediction to ground truth
         matched_pred_seg, iou_matrix = match_pred_to_gt(pred_seg, gt_seg)
@@ -306,26 +338,64 @@ def save_evaluation_csv(results, output_path, case_name=None):
         print(f"Error saving CSV file: {e}")
 
 
-def find_matching_files(pred_dir, gt_dir):
+def find_matching_files(pred_dir, gt_dir, pred_filename="final_instance_seg.tiff"):
     """
     Find prediction files and their corresponding ground truth files.
     Supports specific naming patterns:
-    - Prediction: refined_RibFrac*.tif
+    - Prediction folder structure: pred_aff_test_RibFrac*/final_instance_seg.tiff
+    - Prediction file: refined_RibFrac*.tif
     - Ground truth: RibFrac*-rib-seg.nii.gz
     
     Args:
-        pred_dir: Directory containing prediction files
+        pred_dir: Directory containing prediction files or subdirectories
         gt_dir: Directory containing ground truth files
+        pred_filename: Filename to look for in prediction subdirectories (default: final_instance_seg.tiff)
     
     Returns:
         List of tuples (pred_path, gt_path)
     """
+    import re
+    
     # Common file extensions
     pred_extensions = ['*.tif', '*.tiff', '*.nii', '*.nii.gz', '*.zarr']
     gt_extensions = ['*.tif', '*.tiff', '*.nii', '*.nii.gz', '*.zarr']
     
     file_pairs = []
     
+    # First, check for subdirectory structure (pred_aff_test_RibFrac*/final_instance_seg.tiff)
+    subdirs = [d for d in os.listdir(pred_dir) if os.path.isdir(os.path.join(pred_dir, d))]
+    ribfrac_subdirs = [d for d in subdirs if 'RibFrac' in d]
+    
+    if ribfrac_subdirs:
+        print(f"Found {len(ribfrac_subdirs)} prediction subdirectories with RibFrac pattern")
+        
+        for subdir in sorted(ribfrac_subdirs):
+            # Extract RibFrac ID from folder name (e.g., pred_aff_test_RibFrac653 -> 653)
+            match = re.search(r'RibFrac(\d+)', subdir)
+            if match:
+                ribfrac_id = match.group(1)
+                
+                # Look for prediction file in subdirectory
+                pred_file = os.path.join(pred_dir, subdir, pred_filename)
+                
+                if os.path.exists(pred_file):
+                    # Look for corresponding ground truth
+                    gt_candidate = os.path.join(gt_dir, f"RibFrac{ribfrac_id}-rib-seg.nii.gz")
+                    
+                    if os.path.exists(gt_candidate):
+                        file_pairs.append((pred_file, gt_candidate))
+                        print(f"Matched (subdir pattern): {subdir}/{pred_filename} -> RibFrac{ribfrac_id}-rib-seg.nii.gz")
+                    else:
+                        print(f"No ground truth found for RibFrac{ribfrac_id} (expected: {gt_candidate})")
+                else:
+                    print(f"Prediction file not found: {pred_file}")
+            else:
+                print(f"Could not extract RibFrac ID from: {subdir}")
+        
+        if file_pairs:
+            return file_pairs
+    
+    # Fallback to original file-based matching
     # Find prediction files
     pred_files = []
     for ext in pred_extensions:
@@ -390,12 +460,12 @@ def process_single_evaluation(args):
     Process a single file pair - used for parallel processing.
     
     Args:
-        args: Tuple of (pred_path, gt_path, resize_gt, verbose)
+        args: Tuple of (pred_path, gt_path, resize_gt, verbose, transpose_gt)
     
     Returns:
         dict: File evaluation result
     """
-    pred_path, gt_path, resize_gt, verbose = args
+    pred_path, gt_path, resize_gt, verbose, transpose_gt = args
     
     file_result = {
         "pred_file": pred_path,
@@ -412,7 +482,7 @@ def process_single_evaluation(args):
     
     try:
         # Evaluate Dice
-        results = evaluate_dice(pred_path, gt_path, resize_gt, verbose)
+        results = evaluate_dice(pred_path, gt_path, resize_gt, verbose, transpose_gt)
         
         if "error" not in results:
             file_result["success"] = True
@@ -430,7 +500,8 @@ def process_single_evaluation(args):
 
 
 def batch_evaluate_dice(pred_dir, gt_dir, output_dir=None, resize_gt=True, 
-                       save_results=True, save_csv=True, n_workers=None, verbose=True):
+                       save_results=True, save_csv=True, n_workers=None, verbose=True,
+                       pred_filename="final_instance_seg.tiff", transpose_gt="auto"):
     """
     Batch evaluate Dice coefficient for multiple file pairs with parallel processing.
     
@@ -443,6 +514,8 @@ def batch_evaluate_dice(pred_dir, gt_dir, output_dir=None, resize_gt=True,
         save_csv: Whether to save evaluation results to CSV
         n_workers: Number of parallel workers (default: CPU count)
         verbose: Whether to print progress messages
+        pred_filename: Filename to look for in prediction subdirectories (default: final_instance_seg.tiff)
+        transpose_gt: How to transpose GT to match pred shape ("auto", "zyx_to_xyz", "zyx_to_yxz", "none")
     
     Returns:
         dict: Summary of batch evaluation results
@@ -455,9 +528,10 @@ def batch_evaluate_dice(pred_dir, gt_dir, output_dir=None, resize_gt=True,
         print(f"Prediction directory: {pred_dir}")
         print(f"Ground truth directory: {gt_dir}")
         print(f"Output directory: {output_dir}")
+        print(f"Prediction filename: {pred_filename}")
     
     # Find all file pairs
-    file_pairs = find_matching_files(pred_dir, gt_dir)
+    file_pairs = find_matching_files(pred_dir, gt_dir, pred_filename=pred_filename)
     
     if not file_pairs:
         if verbose:
@@ -494,7 +568,7 @@ def batch_evaluate_dice(pred_dir, gt_dir, output_dir=None, resize_gt=True,
     # Prepare arguments for parallel processing
     process_args = []
     for pred_path, gt_path in file_pairs:
-        process_args.append((pred_path, gt_path, resize_gt, verbose))
+        process_args.append((pred_path, gt_path, resize_gt, verbose, transpose_gt))
     
     # Process files in parallel
     start_time = time.time()
@@ -628,13 +702,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Evaluate Dice coefficient between prediction and ground truth segmentation files.\n"
                    "Supports file naming patterns:\n"
-                   "  - Prediction: refined_RibFrac*.tif\n"
+                   "  - Prediction folder: pred_aff_test_RibFrac*/final_instance_seg.tiff\n"
+                   "  - Prediction file: refined_RibFrac*.tif\n"
                    "  - Ground truth: RibFrac*-rib-seg.nii.gz\n\n"
                    "Examples:\n"
                    "  # Single file evaluation\n"
                    "  python evaluate_dice.py -p refined_RibFrac501.tif -g RibFrac501-rib-seg.nii.gz\n\n"
-                   "  # Batch evaluation\n"
-                   "  python evaluate_dice.py -p /path/to/predictions/ -g /path/to/ground_truth/ --batch\n\n"
+                   "  # Batch evaluation with subdirectory structure\n"
+                   "  python evaluate_dice.py -p /path/to/pred_folders/ -g /path/to/ground_truth/ --batch\n\n"
+                   "  # Batch evaluation with custom prediction filename\n"
+                   "  python evaluate_dice.py -p /path/to/preds/ -g /path/to/gts/ --batch --pred-filename initial_instance_seg.tiff\n\n"
                    "  # With custom output directory\n"
                    "  python evaluate_dice.py -p /path/to/preds/ -g /path/to/gts/ --batch -o /path/to/results/",
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -655,8 +732,13 @@ def main():
                        help="Resize ground truth to match prediction shape (default: True)")
     parser.add_argument("--no-resize", action="store_true",
                        help="Do not resize ground truth (will fail if shapes don't match)")
+    parser.add_argument("--transpose-gt", type=str, default="auto",
+                       choices=["auto", "zyx_to_xyz", "zyx_to_yxz", "none"],
+                       help="How to transpose GT: auto (default), zyx_to_xyz, zyx_to_yxz, or none")
     
     # Batch processing options
+    parser.add_argument("--pred-filename", type=str, default="final_instance_seg.tiff",
+                       help="Filename to look for in prediction subdirectories (default: final_instance_seg.tiff)")
     parser.add_argument("--save-results", action="store_true", default=True,
                        help="Save batch processing results summary (default: True)")
     parser.add_argument("--save-csv", action="store_true", default=True,
@@ -700,7 +782,9 @@ def main():
             save_results=args.save_results,
             save_csv=args.save_csv,
             n_workers=args.n_workers,
-            verbose=args.verbose
+            verbose=args.verbose,
+            pred_filename=args.pred_filename,
+            transpose_gt=args.transpose_gt
         )
         
         if results.get("successful", 0) > 0:
@@ -717,7 +801,8 @@ def main():
             args.pred, 
             args.gt, 
             resize_gt=args.resize_gt,
-            verbose=args.verbose
+            verbose=args.verbose,
+            transpose_gt=args.transpose_gt
         )
         
         if "error" not in results:

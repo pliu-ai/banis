@@ -55,3 +55,9 @@ python src/inference/pred_and_eval.py \
     --skeleton_threshold 0.4 \
     --gt_file ground_truth.nii.gz 
  ```
+
+ # decode from sdt only
+
+ ```bash
+python src/inference/watershed_and_eval_sdt_only.py --prediction_file path/to/pred_aff_test_high_c2.zarr --gt_file path/to/ground_truth.nii.gz  --output_path path/to/output_dir --skeleton_threshold 0.5  --output_format tiff --edt_parallel 8 --edt_downsample_factor 2 --eval_initial
+ ```
