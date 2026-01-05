@@ -1,5 +1,0 @@
-Requirement already satisfied: zarr in /projects/weilab/liupeng/conda/envs/sdt/lib/python3.11/site-packages (2.18.3)
-Requirement already satisfied: asciitree in /projects/weilab/liupeng/conda/envs/sdt/lib/python3.11/site-packages (from zarr) (0.3.3)
-Requirement already satisfied: numpy>=1.24 in /projects/weilab/liupeng/conda/envs/sdt/lib/python3.11/site-packages (from zarr) (2.0.2)
-Requirement already satisfied: numcodecs>=0.10.0 in /projects/weilab/liupeng/conda/envs/sdt/lib/python3.11/site-packages (from zarr) (0.13.1)
-Requirement already satisfied: fasteners in /projects/weilab/liupeng/conda/envs/sdt/lib/python3.11/site-packages (from zarr) (0.19)
