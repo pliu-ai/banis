@@ -32,26 +32,10 @@ except ImportError:
     EVALUATION_AVAILABLE = False
     print("Warning: Evaluation module not available. Install required packages to enable evaluation.")
 
-# Try to import fast edt library
-try:
-    import edt
-    EDT_AVAILABLE = True
-    print("Fast EDT library available (5-10x faster than scipy)")
-except ImportError:
-    EDT_AVAILABLE = False
-    print("Fast EDT library not available. Using scipy (slower). Install with: pip install edt")
-
 
 def load_mask_data(file_path: str, h5_key: str = ""):
     """
     Load mask data from h5, nii.gz, tiff, or zarr files.
-    
-    Args:
-        file_path: Path to the mask file.
-        h5_key: Key/path to the data in the h5 file (only used for h5 files).
-    
-    Returns:
-        numpy.ndarray: The loaded mask data (binary mask, values > 0 are True/valid regions)
     """
     file_ext = file_path.lower()
     
@@ -59,7 +43,6 @@ def load_mask_data(file_path: str, h5_key: str = ""):
         # Read h5 data
         print(f"Loading mask from h5 file: {file_path}")
         with h5py.File(file_path, 'r') as f:
-            # If h5_key is not provided or empty, use the first key
             if not h5_key:
                 available_keys = list(f.keys())
                 if len(available_keys) == 0:
@@ -92,14 +75,11 @@ def load_mask_data(file_path: str, h5_key: str = ""):
             zarr_data = zarr.open_array(file_path, mode='r') if file_ext.endswith('.zarr') else zarr.open(file_path, mode='r')
             
             if hasattr(zarr_data, 'shape'):
-                # It's a zarr array
                 mask_data = zarr_data[:]
             else:
-                # It's a zarr group
                 if h5_key and h5_key in zarr_data:
                     mask_data = zarr_data[h5_key][:]
                 else:
-                    # Use first available key
                     available_keys = list(zarr_data.keys())
                     if len(available_keys) == 0:
                         raise ValueError("No keys found in zarr group")
@@ -107,18 +87,15 @@ def load_mask_data(file_path: str, h5_key: str = ""):
                     mask_data = zarr_data[key][:]
                     print(f"Using first key: {key}")
             
-            # Convert to numpy if needed
             if hasattr(mask_data, 'compute'):
                 mask_data = mask_data.compute()
         except Exception as e:
             raise ValueError(f"Failed to open mask zarr file at {file_path}: {e}")
     
     else:
-        raise ValueError(f"Unsupported mask file format: {file_path}. Supported formats: .zarr, .h5, .hdf5, .nii, .nii.gz, .tif, .tiff")
+        raise ValueError(f"Unsupported mask file format: {file_path}")
     
-    # Convert to boolean mask (values > 0 are valid regions)
     mask_data = mask_data > 0
-    
     print(f"Mask shape: {mask_data.shape}, dtype: {mask_data.dtype}")
     print(f"Mask valid pixels: {np.sum(mask_data)} / {mask_data.size} ({100 * np.sum(mask_data) / mask_data.size:.2f}%)")
     
@@ -128,14 +105,6 @@ def load_mask_data(file_path: str, h5_key: str = ""):
 def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = -1):
     """
     Load SDT (Signed Distance Transform) channel from zarr, h5, nii.gz, or tiff files.
-    
-    Args:
-        file_path: Path to the input file (zarr, h5, nii.gz, or tiff).
-        zarr_key: Key/path to the data in the zarr file (only used for zarr files). If empty, assumes root array.
-        sdt_channel_idx: Index of the SDT channel (default: -1 for last channel). Can be negative for reverse indexing.
-    
-    Returns:
-        tuple: (sdt_channel, sitk.Image or None) - The loaded SDT channel and SimpleITK image object (for metadata)
     """
     file_ext = file_path.lower()
     sitk_image = None
@@ -145,13 +114,12 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
     if file_ext.endswith('.zarr'):
         is_zarr = True
     elif os.path.isdir(file_path):
-        # Check for zarr v2 (zarr.json) or zarr v3 (.zarray) markers
         if os.path.exists(os.path.join(file_path, 'zarr.json')) or \
            os.path.exists(os.path.join(file_path, '.zarray')):
             is_zarr = True
     
     if is_zarr:
-        # Read zarr data
+        # ... (Zarr loading logic remains same) ...
         print(f"Loading zarr data from: {file_path}")
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Zarr file/directory not found: {file_path}")
@@ -161,7 +129,6 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
         except Exception as e:
             raise ValueError(f"Failed to open zarr file at {file_path}: {e}")
         
-        # If zarr_key is provided, try to access it
         if zarr_key:
             if zarr_key in zarr_data:
                 data = zarr_data[zarr_key][:]
@@ -170,13 +137,10 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
                 print(f"Available keys in zarr file: {list(zarr_data.keys())}")
                 raise KeyError(f"Key '{zarr_key}' not found in zarr file")
         else:
-            # Assume it's a zarr array (not a group) or access root array
             if hasattr(zarr_data, 'shape'):
-                # It's a zarr array
                 data = zarr_data[:]
                 print(f"Loaded zarr array with shape: {data.shape}")
             else:
-                # It's a zarr group, try to find the main array
                 possible_keys = ['data', 'prediction', 'pred', 'sdt']
                 found = False
                 for key in possible_keys:
@@ -196,30 +160,23 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
         
         print(f"Loaded data shape: {data.shape}, dtype: {data.dtype}")
         
-        # Handle different array shapes
         if len(data.shape) == 3:
-            # 3D data - assume it's the SDT channel directly
             sdt_channel = data
             print(f"3D data detected, using as SDT channel directly, shape: {sdt_channel.shape}")
         elif len(data.shape) == 4:
-            # 4D data - determine if channels are first or last
             min_dim = min(data.shape)
             max_dim = max(data.shape[:-1])
             
             if data.shape[0] < max_dim:
                 channels_first = True
                 num_channels = data.shape[0]
-                print(f"Detected channels-first format: (channels={num_channels}, spatial dims)")
             elif data.shape[-1] < max_dim:
                 channels_first = False
                 num_channels = data.shape[-1]
-                print(f"Detected channels-last format: (spatial dims, channels={num_channels})")
             else:
                 channels_first = True
                 num_channels = data.shape[0]
-                print(f"Ambiguous format, assuming channels-first: (channels={num_channels}, spatial dims)")
             
-            # Extract SDT channel
             if channels_first:
                 if sdt_channel_idx < 0:
                     sdt_channel_idx = num_channels + sdt_channel_idx
@@ -233,14 +190,13 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
         else:
             raise ValueError(f"Unsupported data shape: {data.shape}. Expected 3D or 4D array.")
         
-        # Convert to numpy if needed
         if hasattr(sdt_channel, 'compute'):
             sdt_channel = sdt_channel.compute()
         
         return sdt_channel, sitk_image
     
     elif file_ext.endswith('.h5') or file_ext.endswith('.hdf5'):
-        # Read h5 data
+        # ... (H5 loading logic remains same) ...
         print(f"Loading h5 data from: {file_path}")
         with h5py.File(file_path, 'r') as f:
             if not zarr_key:
@@ -292,6 +248,7 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
         
         return sdt_channel, sitk_image
     
+    # ------------------ Modified Logic for TIFF/NIfTI ------------------
     elif file_ext.endswith('.nii.gz') or file_ext.endswith('.nii') or file_ext.endswith('.tif') or file_ext.endswith('.tiff'):
         # Read image data using SimpleITK
         print(f"Loading image data from: {file_path}")
@@ -299,19 +256,33 @@ def load_sdt_channel(file_path: str, zarr_key: str = "", sdt_channel_idx: int = 
         data = sitk.GetArrayFromImage(sitk_image)
         print(f"Loaded image with shape: {data.shape}")
         
-        if len(data.shape) == 3:
+        # Explicitly handle 2D or 3D scalar inputs as direct SDT maps
+        if len(data.shape) == 2:
             sdt_channel = data
+            print(f"2D data detected, using directly as SDT channel, shape: {sdt_channel.shape}")
+            
+        elif len(data.shape) == 3:
+            # Assumes standard (Z, Y, X) for 3D scalar images or single channel volumes
+            sdt_channel = data
+            print(f"3D data detected, using directly as SDT channel (Z, Y, X), shape: {sdt_channel.shape}")
+            
         elif len(data.shape) == 4:
-            # Assume channels are in the first dimension
+            # Assume channels are in the first dimension (SimpleITK usually reads as C last, but GetArray flips to C first or Z first)
+            # Typically Sitk GetArrayFromImage returns (Z, Y, X, C) if vectors? No, usually (Z, Y, X) for scalar.
+            # If 4D, usually (Time/Channel, Z, Y, X) in numpy.
+            
+            print(f"4D data detected (likely multi-channel), extracting channel {sdt_channel_idx}")
             num_channels = data.shape[0]
             if sdt_channel_idx < 0:
                 sdt_channel_idx = num_channels + sdt_channel_idx
             sdt_channel = data[sdt_channel_idx]
             print(f"Extracted SDT channel {sdt_channel_idx}, shape: {sdt_channel.shape}")
+            
         else:
-            raise ValueError(f"Unsupported data shape: {data.shape}. Expected 3D or 4D array.")
+            raise ValueError(f"Unsupported data shape: {data.shape}. Expected 2D, 3D or 4D array.")
         
         return sdt_channel, sitk_image
+    # -------------------------------------------------------------------
     
     else:
         raise ValueError(f"Unsupported file format: {file_path}. Supported formats: .zarr, .h5, .hdf5, .nii, .nii.gz, .tif, .tiff")
@@ -321,25 +292,7 @@ def apply_watershed_segmentation_sdt_only(sdt_channel, skeleton_thr=0.0, min_siz
                                           edt_downsample_factor=1, use_fast_edt=True, 
                                           edt_parallel=4, edt_anisotropy=None):
     """
-    Apply two-stage watershed segmentation using only SDT channel:
-    1. Use SDT > skeleton_thr to get initial instance seeds
-    2. Use SDT > 0 as foreground mask (binary mask)
-    3. Refine using watershed with distance transform
-    
-    Args:
-        sdt_channel: SDT (Signed Distance Transform) channel data
-        skeleton_thr: threshold for SDT channel to create seeds (default: 0.0)
-        min_size: minimum size of segmented regions (default: 100)
-        edt_downsample_factor: downsample factor for distance transform computation (default: 1, no downsampling)
-        use_fast_edt: whether to use fast edt library if available (default: True)
-        edt_parallel: number of parallel threads for fast edt (default: 4)
-        edt_anisotropy: anisotropy tuple for edt (e.g., (1.0, 1.0, 1.0) for isotropic). If None, auto-detect (default: None)
-    
-    Returns:
-        tuple: (foreground_mask, initial_instance_seg, final_instance_seg)
-            - foreground_mask: binary mask from SDT > 0
-            - initial_instance_seg: connected components from SDT > skeleton_thr
-            - final_instance_seg: refined watershed result
+    Apply two-stage watershed segmentation using only SDT channel.
     """
     print(f"\n=== Stage 1: Initial instance segmentation from SDT (skeleton_thr={skeleton_thr}) ===")
     
@@ -348,7 +301,11 @@ def apply_watershed_segmentation_sdt_only(sdt_channel, skeleton_thr=0.0, min_siz
     print(f"SDT > {skeleton_thr} mask stats: {np.sum(skeleton_mask)} pixels")
     
     # Get initial instance segmentation using connected components
-    initial_instance_seg = cc3d.connected_components(skeleton_mask, connectivity=26)
+    # For 2D data, ensure we use appropriate connectivity (8 for 2D, 26 for 3D)
+    connectivity = 8 if sdt_channel.ndim == 2 else 26
+    print(f"Using connectivity: {connectivity}")
+    
+    initial_instance_seg = cc3d.connected_components(skeleton_mask, connectivity=connectivity)
     
     if len(np.unique(initial_instance_seg)) == 0:
         print("Warning: No seeds found! Returning empty segmentation.")
@@ -462,12 +419,6 @@ def apply_watershed_segmentation_sdt_only(sdt_channel, skeleton_thr=0.0, min_siz
 def save_image_data(data, output_path, reference_sitk_image=None, h5_key="data"):
     """
     Save image data to file in the same format as input.
-    
-    Args:
-        data: numpy array to save
-        output_path: output file path
-        reference_sitk_image: reference SimpleITK image for metadata (optional)
-        h5_key: key to use when saving h5 files
     """
     file_ext = output_path.lower()
     
@@ -480,18 +431,21 @@ def save_image_data(data, output_path, reference_sitk_image=None, h5_key="data")
         print(f"Saving as NIfTI to: {output_path}")
         sitk_output = sitk.GetImageFromArray(data)
         if reference_sitk_image is not None:
-            sitk_output.SetSpacing(reference_sitk_image.GetSpacing())
-            sitk_output.SetOrigin(reference_sitk_image.GetOrigin())
-            sitk_output.SetDirection(reference_sitk_image.GetDirection())
+            # Only copy metadata if dimensions match (handling 2D input -> 3D ref edge case)
+            if sitk_output.GetDimension() == reference_sitk_image.GetDimension():
+                sitk_output.SetSpacing(reference_sitk_image.GetSpacing())
+                sitk_output.SetOrigin(reference_sitk_image.GetOrigin())
+                sitk_output.SetDirection(reference_sitk_image.GetDirection())
         sitk.WriteImage(sitk_output, output_path, useCompression=True)
     
     elif file_ext.endswith('.tif') or file_ext.endswith('.tiff'):
         print(f"Saving as TIFF to: {output_path}")
         sitk_output = sitk.GetImageFromArray(data)
         if reference_sitk_image is not None:
-            sitk_output.SetSpacing(reference_sitk_image.GetSpacing())
-            sitk_output.SetOrigin(reference_sitk_image.GetOrigin())
-            sitk_output.SetDirection(reference_sitk_image.GetDirection())
+             if sitk_output.GetDimension() == reference_sitk_image.GetDimension():
+                sitk_output.SetSpacing(reference_sitk_image.GetSpacing())
+                sitk_output.SetOrigin(reference_sitk_image.GetOrigin())
+                sitk_output.SetDirection(reference_sitk_image.GetDirection())
         sitk.WriteImage(sitk_output, output_path, useCompression=True)
     
     elif file_ext.endswith('.zarr'):
@@ -500,7 +454,7 @@ def save_image_data(data, output_path, reference_sitk_image=None, h5_key="data")
             data,
             dtype=data.dtype,
             store=output_path,
-            chunks=(min(3, data.shape[0]), 512, 512, 512) if len(data.shape) == 4 else (512, 512, 512),
+            chunks=(min(3, data.shape[0]), 512, 512, 512) if len(data.shape) == 4 else (512, 512, 512) if len(data.shape) == 3 else True,
             overwrite=True,
         )
     
@@ -528,27 +482,7 @@ def process_watershed_and_eval_sdt_only(
     mask_h5_key: str = "",
 ):
     """
-    Load SDT channel from zarr/h5 file, apply watershed segmentation using SDT only, and evaluate.
-    
-    SDT > 0 is used as the binary foreground mask (replacing affinity channel).
-    SDT > skeleton_threshold is used for initial instance seeds.
-    
-    Args:
-        prediction_file: Path to the prediction file (zarr or h5) containing SDT channel.
-        output_path: Path to output directory.
-        zarr_key: Key/path to the data in the zarr/h5 file. If empty, uses first key or root array.
-        sdt_channel_idx: Index of the SDT channel (default: -1 for last channel). Can be negative for reverse indexing.
-        skeleton_threshold: Threshold for SDT channel to create seeds (default: 0.0).
-        watershed_min_size: Minimum size of segmented regions (default: 100).
-        edt_downsample_factor: Downsample factor for distance transform computation (default: 1, no downsampling).
-        use_fast_edt: Whether to use fast edt library if available (default: True).
-        edt_parallel: Number of parallel threads for fast edt (default: 4).
-        edt_anisotropy: Anisotropy tuple for edt (e.g., (1.0, 1.0, 1.0)). If None, auto-detect (default: None).
-        output_format: Output format: "auto" (same as input), "zarr", "h5", "nii.gz", "tiff" (default: "auto").
-        gt_file: Path to ground truth file for evaluation. If provided, will evaluate final_instance_seg (default: None).
-        eval_initial: Whether to also evaluate initial instance segmentation. Requires gt_file (default: False).
-        mask_file: Path to mask file. If provided, predictions outside mask will be set to 0 for evaluation (default: None).
-        mask_h5_key: Key/path to the mask data in the h5 file (only used for h5 files). If empty, uses first key (default: "").
+    Main processing function.
     """
     # Load SDT channel
     print(f"Loading SDT channel from: {prediction_file}")
@@ -568,6 +502,8 @@ def process_watershed_and_eval_sdt_only(
             output_ext = '.h5'
         elif input_ext.endswith('.zarr') or os.path.isdir(prediction_file):
             output_ext = '.zarr'
+        elif input_ext.endswith('.tif') or input_ext.endswith('.tiff'):
+            output_ext = '.tiff'
         else:
             output_ext = '.nii.gz'
     else:
@@ -807,39 +743,40 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic watershed segmentation using SDT only
+  # Basic watershed segmentation using SDT only (TIFF or Zarr/H5)
   python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/
+  python watershed_and_eval_sdt_only.py --prediction_file my_sdt_prediction.tiff --output_path output_dir/
   
   # Apply watershed with custom seed threshold
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --skeleton_threshold 0.5 --watershed_min_size 100
   
   # Apply watershed and evaluate against ground truth
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --gt_file ground_truth.nii.gz
   
   # Apply watershed and evaluate both initial and final segmentation
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --gt_file ground_truth.nii.gz --eval_initial
   
   # Apply watershed with mask and evaluate
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --gt_file ground_truth.nii.gz --mask_file mask.tiff
   
-  # Specify SDT channel index (e.g., last channel)
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  # Specify SDT channel index (e.g., last channel) - useful for multi-channel Zarr/Nifti
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --sdt_channel_idx -1
   
   # Use fast edt library with 8 parallel threads
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --edt_parallel 8
   
   # Speed up EDT with downsampling
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --edt_downsample_factor 2
   
   # Save in specific format
-  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \\
+  python watershed_and_eval_sdt_only.py --prediction_file predictions.zarr --output_path output_dir/ \
       --output_format nii.gz
 
 Key Differences from watershed_and_eval.py:
@@ -852,46 +789,46 @@ Key Differences from watershed_and_eval.py:
     
     # Required arguments
     parser.add_argument("--prediction_file", type=str, required=True, 
-                       help="Path to the prediction file (zarr or h5) containing SDT channel")
+                        help="Path to the prediction file (zarr, h5, or tiff/nii) containing SDT channel")
     parser.add_argument("--output_path", type=str, required=True, 
-                       help="Path to output directory")
+                        help="Path to output directory")
     
     # File loading options
     parser.add_argument("--zarr_key", type=str, default="", 
-                       help="Key/path to the data in the zarr/h5 file. If empty, uses first key or root array (default: '')")
+                        help="Key/path to the data in the zarr/h5 file. If empty, uses first key or root array (default: '')")
     parser.add_argument("--sdt_channel_idx", type=int, default=-1, 
-                       help="Index of the SDT channel (default: -1 for last channel). Can be negative for reverse indexing.")
+                        help="Index of the SDT channel (default: -1 for last channel). Ignored if input is single-channel TIFF/NIfTI.")
     
     # Watershed segmentation options
     parser.add_argument("--skeleton_threshold", type=float, default=0.0, 
-                       help="Threshold for SDT channel to create initial instance seeds (default: 0.0)")
+                        help="Threshold for SDT channel to create initial instance seeds (default: 0.0)")
     parser.add_argument("--watershed_min_size", type=int, default=200, 
-                       help="Minimum size of segmented regions to keep (default: 200)")
+                        help="Minimum size of segmented regions to keep (default: 200)")
     parser.add_argument("--edt_downsample_factor", type=int, default=1, 
-                       help="Downsample factor for distance transform computation (default: 1, no downsampling)")
+                        help="Downsample factor for distance transform computation (default: 1, no downsampling)")
     parser.add_argument("--use_fast_edt", action="store_true", default=True,
-                       help="Use fast edt library if available (default: True)")
+                        help="Use fast edt library if available (default: True)")
     parser.add_argument("--no_fast_edt", action="store_false", dest="use_fast_edt",
-                       help="Disable fast edt library and use scipy instead")
+                        help="Disable fast edt library and use scipy instead")
     parser.add_argument("--edt_parallel", type=int, default=4,
-                       help="Number of parallel threads for fast edt library (default: 4)")
+                        help="Number of parallel threads for fast edt library (default: 4)")
     parser.add_argument("--edt_anisotropy", type=float, nargs='+', default=None,
-                       help="Anisotropy values for edt (e.g., --edt_anisotropy 1.0 1.0 1.0 for 3D)")
+                        help="Anisotropy values for edt (e.g., --edt_anisotropy 1.0 1.0 1.0 for 3D)")
     
     # Output options
     parser.add_argument("--output_format", type=str, default="auto", 
-                       choices=["auto", "zarr", "h5", "nii.gz", "tiff"],
-                       help="Output format: 'auto' (same as input), 'zarr', 'h5', 'nii.gz', 'tiff' (default: auto)")
+                        choices=["auto", "zarr", "h5", "nii.gz", "tiff"],
+                        help="Output format: 'auto' (same as input), 'zarr', 'h5', 'nii.gz', 'tiff' (default: auto)")
     
     # Evaluation options
     parser.add_argument("--gt_file", type=str, default=None, 
-                       help="Path to ground truth file for evaluation (default: None)")
+                        help="Path to ground truth file for evaluation (default: None)")
     parser.add_argument("--eval_initial", action="store_true", default=False,
-                       help="Also evaluate initial instance segmentation. Requires --gt_file (default: False)")
+                        help="Also evaluate initial instance segmentation. Requires --gt_file (default: False)")
     parser.add_argument("--mask_file", type=str, default=None, 
-                       help="Path to mask file. Predictions outside mask will be set to 0 (default: None)")
+                        help="Path to mask file. Predictions outside mask will be set to 0 (default: None)")
     parser.add_argument("--mask_h5_key", type=str, default="", 
-                       help="Key/path to the mask data in h5 file (default: '')")
+                        help="Key/path to the mask data in h5 file (default: '')")
     
     args = parser.parse_args()
     
@@ -919,4 +856,3 @@ Key Differences from watershed_and_eval.py:
         mask_file=args.mask_file,
         mask_h5_key=args.mask_h5_key,
     )
-
