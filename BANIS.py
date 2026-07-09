@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List
 import random
+import warnings
 
 import numpy as np
 import pytorch_lightning as pl
@@ -23,6 +24,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 from types import SimpleNamespace
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 from src.data.data import load_data
 from src.inference.inference import scale_sigmoid, patched_inference, compute_connected_component_segmentation
@@ -91,6 +96,18 @@ class BANIS(LightningModule):
     def on_fit_start(self):
         self.logger.experiment.add_text("hparams", str(self.hparams))
 
+    def _wandb_log_metric(self, name: str, value: torch.Tensor | float) -> None:
+        """Best-effort direct W&B logging for critical metrics."""
+        if wandb is None or wandb.run is None:
+            return
+        # Avoid duplicate logs from non-primary ranks.
+        if hasattr(self, "trainer") and self.trainer is not None:
+            if hasattr(self.trainer, "is_global_zero") and not self.trainer.is_global_zero:
+                return
+        if isinstance(value, torch.Tensor):
+            value = float(value.detach().cpu().item())
+        wandb.log({name: value}, step=int(self.global_step))
+
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=self.hparams.learning_rate, weight_decay=self.hparams.weight_decay)
         if self.hparams.scheduler:
@@ -117,25 +134,68 @@ class BANIS(LightningModule):
         self.log_input(data["img"])
         self.log_weight_stats()
         pred = self(data["img"])
+        if not torch.isfinite(pred).all():
+            raise RuntimeError(f"Non-finite model predictions at step={self.global_step}, mode={mode}")
         if self.hparams.sdt:
             aff_pred, sdt_pred = pred[:, :-1], pred[:, -1]
         else:
             aff_pred = pred
         target = data["aff"].half()
         aff_loss_mask = data["aff"] >= 0
-        aff_loss = binary_cross_entropy_with_logits(aff_pred[aff_loss_mask], target[aff_loss_mask])
-        self.log(f"{mode}_aff_loss", aff_loss)
+        if aff_loss_mask.any():
+            aff_loss = binary_cross_entropy_with_logits(aff_pred[aff_loss_mask], target[aff_loss_mask])
+        else:
+            # Keep training numerically stable on extremely sparse patches.
+            aff_loss = aff_pred.sum() * 0.0
+            warnings.warn(
+                f"Empty affinity supervision mask at step={self.global_step}, mode={mode}; "
+                "using zero affinity loss for this batch."
+            )
+        self.log(
+            f"{mode}_aff_loss",
+            aff_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=(mode == "train"),
+            batch_size=data["img"].shape[0],
+        )
+        self._wandb_log_metric(f"{mode}_aff_loss", aff_loss)
 
         if self.hparams.sdt:
             sdt_target = data["sdt"].half()
             assert -1 <= sdt_target.min() and sdt_target.max() <= 1
             sdt_loss_mask = data["sdt_mask"]
-            sdt_loss = mse_loss(tanh(sdt_pred[sdt_loss_mask]), sdt_target[sdt_loss_mask])
-            self.log(f"{mode}_sdt_loss", sdt_loss)
+            if sdt_loss_mask.any():
+                sdt_loss = mse_loss(tanh(sdt_pred[sdt_loss_mask]), sdt_target[sdt_loss_mask])
+            else:
+                sdt_loss = sdt_pred.sum() * 0.0
+                warnings.warn(
+                    f"Empty SDT supervision mask at step={self.global_step}, mode={mode}; "
+                    "using zero SDT loss for this batch."
+                )
+            self.log(
+                f"{mode}_sdt_loss",
+                sdt_loss,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=(mode == "train"),
+                batch_size=data["img"].shape[0],
+            )
+            self._wandb_log_metric(f"{mode}_sdt_loss", sdt_loss)
             loss = aff_loss + self.hparams.sdt_loss_weight * sdt_loss
         else:
             loss = aff_loss
-        self.log(f"{mode}_loss", loss)
+        self.log(
+            f"{mode}_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=data["img"].shape[0],
+        )
+        self._wandb_log_metric(f"{mode}_loss", loss)
+        if not torch.isfinite(loss):
+            raise RuntimeError(f"Non-finite loss at step={self.global_step}, mode={mode}")
 
 
         if not self.plotted:
@@ -192,6 +252,9 @@ class BANIS(LightningModule):
             print("skipping full cube inference")
 
     def on_train_end(self):
+        if not getattr(self.hparams, "final_full_cube_inference", True):
+            print("Skipping final full cube inference.")
+            return
         # assert self.best_nerl_so_far["val"] > 0, "No best NERL found in validation"
         self.eval()
         print(f"device {next(self.parameters()).device}")
@@ -449,6 +512,44 @@ def main():
     )
     tb_logger.experiment.add_text("save dir", save_dir)
 
+    # Keep TensorBoard as the native logger and optionally sync it to W&B.
+    # This avoids changing existing image/scalar logging code paths.
+    wandb_run = None
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    slurm_proc_id = int(os.environ.get("SLURM_PROCID", "0"))
+    is_global_zero_like = (not args.distributed) or (local_rank == 0 and slurm_proc_id == 0)
+    if args.wandb and args.wandb_mode != "disabled" and is_global_zero_like:
+        if wandb is None:
+            raise ModuleNotFoundError(
+                "wandb is not installed, but --wandb is enabled. "
+                "Install wandb or pass --no-wandb."
+            )
+        wandb_init_kwargs = {
+            "project": args.wandb_project,
+            "name": args.wandb_run_name if args.wandb_run_name else exp_name,
+            "config": vars(args),
+            "dir": save_dir,
+            "mode": args.wandb_mode,
+            "sync_tensorboard": args.wandb_sync_tensorboard,
+            "reinit": True,
+        }
+        if args.wandb_entity:
+            wandb_init_kwargs["entity"] = args.wandb_entity
+        if args.wandb_group:
+            wandb_init_kwargs["group"] = args.wandb_group
+        if args.wandb_tags:
+            wandb_init_kwargs["tags"] = args.wandb_tags
+        wandb_run = wandb.init(**wandb_init_kwargs)
+        if wandb_run is not None:
+            wandb_run.config.update({"save_dir": save_dir}, allow_val_change=True)
+        print(
+            f"W&B enabled (mode={args.wandb_mode}, sync_tensorboard={args.wandb_sync_tensorboard})"
+        )
+    elif args.wandb and not is_global_zero_like:
+        print("Skipping W&B init on non-primary distributed process.")
+    else:
+        print("W&B disabled.")
+
     model_checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         save_last=True,
@@ -496,12 +597,16 @@ def main():
     else:
         model = BANIS(**vars(args))
 
-    trainer.fit(
-        model=model,
-        train_dataloaders=DataLoader(train_data, batch_size=args.batch_size, num_workers=args.workers, shuffle=True, drop_last=True),
-        val_dataloaders=DataLoader(val_data, batch_size=args.batch_size, num_workers=args.workers),
-        ckpt_path="last" if args.resume_from_last_checkpoint else None
-    )
+    try:
+        trainer.fit(
+            model=model,
+            train_dataloaders=DataLoader(train_data, batch_size=args.batch_size, num_workers=args.workers, shuffle=True, drop_last=True),
+            val_dataloaders=DataLoader(val_data, batch_size=args.batch_size, num_workers=args.workers),
+            ckpt_path="last" if args.resume_from_last_checkpoint else None
+        )
+    finally:
+        if wandb_run is not None:
+            wandb.finish()
 
     print("Training complete")
 
@@ -528,7 +633,27 @@ def parse_args():
     parser.add_argument("--resume_from_last_checkpoint", action=argparse.BooleanOptionalAction, default=False, help="Resume training from the last checkpoint.")
     parser.add_argument("--model_from_checkpoint", type=str, default="", help="Load model from defined checkpoint.")
     parser.add_argument("--validate_extern", action=argparse.BooleanOptionalAction, default=False, help="Long training with a separate validation process.")
+    parser.add_argument("--final_full_cube_inference", action=argparse.BooleanOptionalAction, default=True, help="Run full-cube inference/evaluation when training ends.")
     parser.add_argument("--distributed", action=argparse.BooleanOptionalAction, default=False, help="Use distributed training.")
+    parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True, help="Enable Weights & Biases sync.")
+    parser.add_argument("--wandb_project", type=str, default="banis", help="W&B project name.")
+    parser.add_argument("--wandb_entity", type=str, default="", help="W&B entity/team (optional).")
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        default="online",
+        choices=["online", "offline", "disabled"],
+        help="W&B sync mode. Default is online.",
+    )
+    parser.add_argument(
+        "--wandb_sync_tensorboard",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Sync TensorBoard logs to W&B.",
+    )
+    parser.add_argument("--wandb_run_name", type=str, default="", help="Custom W&B run name (defaults to exp_name).")
+    parser.add_argument("--wandb_group", type=str, default="", help="W&B group name (optional).")
+    parser.add_argument("--wandb_tags", nargs="*", default=[], help="W&B tags.")
 
     # Data arguments
     parser.add_argument("--base_data_path", type=str, default="/cajal/nvmescratch/projects/NISB/", help="Base path for the dataset.")
@@ -546,6 +671,18 @@ def parse_args():
     parser.add_argument("--shift_magnitude", type=int, default=10, help="Shift augmentation magnitude (voxels).")
     parser.add_argument("--mul_int", type=float, default=0.1, help="Multiplicative augmentation intensity.")
     parser.add_argument("--add_int", type=float, default=0.1, help="Additive augmentation intensity.")
+    parser.add_argument(
+        "--ensure_foreground",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resample patches until they contain at least one foreground voxel (seg > 0).",
+    )
+    parser.add_argument(
+        "--max_sampling_attempts",
+        type=int,
+        default=100,
+        help="Maximum patch resampling attempts when foreground is required.",
+    )
 
     # Model arguments
     parser.add_argument("--long_range", type=int, default=10, help="Long range affinities (voxels).")

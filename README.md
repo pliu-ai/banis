@@ -24,6 +24,10 @@ Tested on a Slurm cluster with nodes equipped with 1 NVIDIA A40 GPU and 500 GB R
 
 ## Training
 
+For the cerebellum p7 workflow, including data preparation, training, testing,
+ITK-SNAP export, and post-processing, see
+[`docs/cerebellum_banis_handoff.md`](docs/cerebellum_banis_handoff.md).
+
 Run a single training session (BANIS-S(mall)):
 
 ```bash
